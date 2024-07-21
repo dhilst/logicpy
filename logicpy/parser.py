@@ -3,19 +3,21 @@ from itertools import chain
 from collections import defaultdict
 from dataclasses import dataclass
 from pprint import pp, pformat
+from frozendict import frozendict
 
 from lark import Lark, Transformer, v_args
-from igraph import Graph, summary, Vertex as _Vertex
+from igraph import Graph, Vertex as _Vertex
 
 class Vertex:
-    def __init__(self, v):
+    def __init__(self, v: _Vertex):
         self.v = v
 
     def __repr__(self):
         return repr(self.v.attributes())
 
-    def __hash__(self):
-        return hash(self.v)
+    def __getattr__(self, attr):
+        return getattr(self.v, attr)
+
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,13 @@ class Parser(Transformer):
     def number(self, value):
         return float(value.value)
 
+def intersection(values):
+    v1, *values = values
+    return v1.intersection(*values)
+
+def union(values):
+    v1, *values = values
+    return v1.union(*values)
 
 class Interpreter:
     def __init__(self, g: Graph):
@@ -106,30 +115,21 @@ class Interpreter:
             case Fcall("and", args):
                 # A list of dics with the results of the evaluations
                 results = [self.evaluate(arg) for arg in args]
-                env = defaultdict(set)
+                env = {}
                 for r in results:
-                    for k, vals in r.items():
-                        values = [r.get(k, set()) for r in results]
-                        for v in vals:
-                            # If the value is included in all the evaluations
-                            # we included in the result this is the AND logic
-                            if all(v in vs for vs in values):
-                                env[k].add(v)
-                return dict(**env)
+                    for k in r:
+                        env[k] = intersection(r.get(k, set()) for r in results)
+                return env
 
             case Fcall("or", args):
                 # A list of dics with the results of the evaluations
                 results = [self.evaluate(arg) for arg in args]
-                env = defaultdict(set)
+                env = {}
                 for r in results:
-                    for k, vals in r.items():
-                        values = [r.get(k, set()) for r in results]
-                        for v in vals:
-                            # If the value is included in all the evaluations
-                            # we included in the result this is the AND logic
-                            if any(v in vs for vs in values):
-                                env[k].add(v)
-                return dict(**env)
+                    for k in r:
+                        env[k] = union(r.get(k, set()) for r in results)
+                return env
+
 
             case Fcall(fname, args):
                 if re.match(r"\w+_(eq|ne|lt|le|gt|ge)$", fname) is not None:
@@ -154,17 +154,8 @@ def main():
     g.vs["age"] = [25, 31, 18, 47, 22, 23, 50]
     g.vs["gender"] = ["f", "m", "f", "m", "f", "m", "m"]
     g.es["is_formal"] = [False, False, True, True, True, False, True, False, False]
-    # exist (v): name_eq(v, "Alice") 
-    # AST Exist(vars=[Var(name='v')], body=Fcall(name='name_eq', args=(Var(name='v'), 'Alice')))
-    # g.vs.select(name_eq="Alice")
     print("Vertices", pformat(list(g.vs)))
-    # ast: AST = logic_parser.parse(sys.stdin.read()) # type: ignore
-    query = 'exist (v): and(gender_eq(v, "m"), age_ge(v, 25))'
-    print("query", query)
-    intp = Interpreter(g)
-    pp(intp.evaluate(logic_parser.parse(query))) # type: ignore
-
-    query = 'exist (v): or(name_eq(v, "Alice"), age_lt(v, 25))'
+    query = input("> ")
     print("query", query)
     intp = Interpreter(g)
     pp(intp.evaluate(logic_parser.parse(query))) # type: ignore
