@@ -1,3 +1,5 @@
+import sys
+from typing import Iterator
 import re
 from itertools import chain
 from collections import defaultdict
@@ -6,17 +8,7 @@ from pprint import pp, pformat
 from frozendict import frozendict
 
 from lark import Lark, Transformer, v_args
-from igraph import Graph, Vertex as _Vertex
-
-class Vertex:
-    def __init__(self, v: _Vertex):
-        self.v = v
-
-    def __repr__(self):
-        return repr(self.v.attributes())
-
-    def __getattr__(self, attr):
-        return getattr(self.v, attr)
+from igraph import Graph, Vertex
 
 
 
@@ -68,7 +60,6 @@ number: NUMBER -> number
 %ignore WS
 """
 
-
 @v_args(inline=True)    # Affects the signatures of the methods
 class Parser(Transformer):
     def __init__(self):
@@ -94,48 +85,42 @@ class Parser(Transformer):
     def number(self, value):
         return float(value.value)
 
-def intersection(values):
-    v1, *values = values
-    return v1.intersection(*values)
-
-def union(values):
-    v1, *values = values
-    return v1.union(*values)
 
 class Interpreter:
     def __init__(self, g: Graph):
         self.g = g
         self.env = {}
 
-    def evaluate(self, ast: AST):
+    def evaluate(self, ast: AST) -> dict[str, set[Vertex]]:
         match ast:
             case Exist(vars, body):
                 return self.evaluate(body)
 
             case Fcall("and", args):
                 # A list of dics with the results of the evaluations
-                results = [self.evaluate(arg) for arg in args]
-                env = {}
-                for r in results:
-                    for k in r:
-                        env[k] = intersection(r.get(k, set()) for r in results)
-                return env
+                results: Iterator[dict[str, set[Vertex]]] = iter(self.evaluate(arg) for arg in args)
+                env: dict[str, list[set[Vertex]]] = defaultdict(list)
+                for d in results:
+                    for k, v in d.items():
+                        env[k].append(v) # type: ignore
+                return {k: set.intersection(*v) for k, v in env.items()} # type: ignore
 
             case Fcall("or", args):
-                # A list of dics with the results of the evaluations
-                results = [self.evaluate(arg) for arg in args]
-                env = {}
-                for r in results:
-                    for k in r:
-                        env[k] = union(r.get(k, set()) for r in results)
-                return env
+                results: Iterator[dict[str, set]] = iter(self.evaluate(arg) for arg in args)
+                env: dict[str, list[set[Vertex]]] = defaultdict(list)
+                for d in results:
+                    for k, v in d.items():
+                        env[k].append(v) # type: ignore
+                return {k: set.union(*v) for k, v in env.items()} # type: ignore
 
 
             case Fcall(fname, args):
+
+                # dirty hack
                 if re.match(r"\w+_(eq|ne|lt|le|gt|ge)$", fname) is not None:
                     v, body = args
                     d = {fname: body}
-                    return {v.name: set(v for v in self.g.vs.select(**d))}
+                    return {v.name: set(frozendict(v.attributes()) for v in self.g.vs.select(**d))}
 
 
         assert False, f"TODO interpret {ast}"
@@ -156,7 +141,7 @@ def main():
     g.es["is_formal"] = [False, False, True, True, True, False, True, False, False]
     print("Vertices", pformat(list(g.vs)))
     query = input("> ")
-    print("query", query)
+    print("query:: ", query)
     intp = Interpreter(g)
     pp(intp.evaluate(logic_parser.parse(query))) # type: ignore
 
