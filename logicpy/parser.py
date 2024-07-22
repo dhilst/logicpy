@@ -1,11 +1,9 @@
-import sys
 from typing import Iterator
 import re
 from itertools import chain
 from collections import defaultdict
 from dataclasses import dataclass
 from pprint import pp, pformat
-from frozendict import frozendict
 
 from lark import Lark, Transformer, v_args
 from igraph import Graph, Vertex
@@ -83,7 +81,7 @@ class Parser(Transformer):
         return value.value[1:-1]
 
     def number(self, value):
-        return float(value.value)
+        return int(value.value)
 
 
 class Interpreter:
@@ -94,7 +92,8 @@ class Interpreter:
     def evaluate(self, ast: AST) -> dict[str, set[Vertex]]:
         match ast:
             case Exist(vars, body):
-                return self.evaluate(body)
+                self.evaluate(body)
+                return self.env
 
             case Fcall("and", args):
                 # A list of dics with the results of the evaluations
@@ -103,7 +102,9 @@ class Interpreter:
                 for d in results:
                     for k, v in d.items():
                         env[k].append(v) # type: ignore
-                return {k: set.intersection(*v) for k, v in env.items()} # type: ignore
+                result = {k: set.intersection(*v) for k, v in env.items()}
+                self.env.update(result)
+                return result
 
             case Fcall("or", args):
                 results: Iterator[dict[str, set]] = iter(self.evaluate(arg) for arg in args)
@@ -111,16 +112,34 @@ class Interpreter:
                 for d in results:
                     for k, v in d.items():
                         env[k].append(v) # type: ignore
-                return {k: set.union(*v) for k, v in env.items()} # type: ignore
+                result = {k: set.union(*v) for k, v in env.items()}
+                self.env.update(result)
+                return result
 
 
             case Fcall(fname, args):
-
-                # dirty hack
-                if re.match(r"\w+_(eq|ne|lt|le|gt|ge)$", fname) is not None:
+                if re.match(r"\w+_(:?eq|ne|lt|le|gt|ge)$", fname) is not None:
                     v, body = args
                     d = {fname: body}
-                    return {v.name: set(frozendict(v.attributes()) for v in self.g.vs.select(**d))}
+                    result = {v.name: set(self.g.vs.select(**d))}
+                    self.env.update(result)
+                    return result
+                elif re.match(r"^_(:?source|from|to|target)$", fname) is not None:
+                    v, body = args
+                    d = {fname: body}
+                    result = {v.name: set(self.g.vs.select(**d))}
+                    self.env.update(result)
+                    return result
+                elif re.match(r"^_(:?between)$", fname) is not None:
+                    v, source_ast, target_ast = args
+                    source = list(v.index for v in set.union(*self.evaluate(source_ast).values()))
+                    target = list(v.index for v in set.union(*self.evaluate(target_ast).values()))
+                    d = {fname: [source, target]}
+                    result = {v.name: set(self.g.es.select(**d)) }
+                    self.env.update(result)
+                    return result
+                else:
+                    raise RuntimeError(f"Unknown function {fname}")
 
 
         assert False, f"TODO interpret {ast}"
